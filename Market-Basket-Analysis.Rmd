@@ -1,0 +1,525 @@
+---
+output:
+  html_document: default
+  pdf_document: default
+---
+---
+
+### André Campos da Silva
+### 17 de Maio, 2021
+
+## Projeto - Sistema de Recomendação Para Rede de Varejo Usando Market Basket Analysis
+
+Quer você faça compras com listas de compras meticulosamente
+planejadas ou deixe que o capricho guie seus passos, nossos rituais únicos de
+compra definem quem somos. Instacart, um aplicativo de pedido e entrega de
+supermercado, tem como objetivo facilitar o preenchimento de sua geladeira e
+despensa com seus itens pessoais favoritos e itens básicos quando você precisar
+deles. Depois de selecionar produtos por meio do aplicativo Instacart, os
+compradores revisam seus pedidos, fazem compras e a entrega é feita na loja
+mais próxima a você.
+
+Neste projeto de ciência de dados,  usaremos esses dados anônimos nos
+pedidos dos clientes ao longo do tempo para indicar quais produtos adquiridos
+anteriormente poderão estar no próximo pedido de algum cliente.
+
+O link para download do dataset você encontra aqui:
+https://www.instacart.com/datasets/grocery-shopping-2017 ou 
+https://www.kaggle.com/c/instacart-market-basket-analysis/data
+
+
+Dicionario dos dados 
+
+orders:
+
+order_id: order identifier
+user_id: customer identifier
+eval_set: which evaluation set this order belongs in (see SET described below)
+order_number: the order sequence number for this user (1 = first, n = nth)
+order_dow: the day of the week the order was placed on
+order_hour_of_day: the hour of the day the order was placed on
+days_since_prior: days since the last order, capped at 30 (with NAs for order_number = 1)
+
+
+products:
+
+product_id: product identifier
+product_name: name of the product
+aisle_id: foreign key
+department_id: foreign key
+
+
+aisles:
+
+aisle_id: aisle identifier
+aisle: the name of the aisle
+
+
+deptartments:
+
+department_id: department identifier
+department: the name of the department
+
+
+
+order_products__train/prior:
+
+order_id: foreign key
+product_id: foreign key
+add_to_cart_order: order in which each product was added to cart
+reordered: 1 if this product has been ordered by this user in the past, 0 otherwise
+
+
+## Carregando pacotes
+
+``` {r}
+# Instalando os pacotes
+
+#install.packages('tidyverse')
+#install.packages('data.table')
+#install.packages('gmodels')
+#install.packages('treemap')
+#install.packages('arules')
+#install.packages('arulesViz')
+#install.packages(''plyr'')
+
+# Carregando pacotes
+
+library('tidyverse')
+library('data.table')
+library('gmodels')
+library('treemap')
+library('arules')
+library('arulesViz')
+library('plyr')
+```
+
+## Carregando os Dados
+
+```{r}
+# Carrego os datasets para análise. 
+
+order <- fread('Dados/orders.csv')
+products <- fread('Dados/products.csv')
+departments <- fread('Dados/departments.csv')
+aisles <- fread('Dados/aisles.csv')
+order_products <- rbind(fread('Dados/order_products__train.csv'),fread('Dados/order_products__prior.csv'))
+
+```
+
+## Manipulação dos dados / Analise exploratória 
+
+```{r}
+
+# Primeiras linhas
+head(order)
+head(products)
+head(departments)
+head(aisles)
+head(order_products)
+
+# Formato dos dados 
+glimpse(order)
+glimpse(products)
+glimpse(departments)
+glimpse(aisles)
+glimpse(order_products)
+
+# Valores nulos nos dados
+sum(is.na(order))
+sum(is.na(products))
+sum(is.na(departments))
+sum(is.na(aisles))
+sum(is.na(order_products))
+
+```
+
+```{r}
+# Quantidade de pedidos
+paste('Quantidade de pedidos:',length(unique(order$order_id)))
+
+# Quantidade de clientes
+paste ('Quantidade de clientes:',length(unique(order$user_id)))
+
+# Quantidade de produtos
+paste('Quantidade de produtos:',length(unique(products$product_id)))
+
+# Quantidade de corredores de produtos
+paste('Quantidade de corredores de produtos:',length(unique(aisles$aisle_id))) 
+
+# Quantidade de departamentos
+paste('Quantidade de departamentos:',length(unique(departments$department_id))) 
+
+```
+
+```{r}
+# Quantidade de clientes por quantidade de vendas.
+order %>% 
+  select(user_id)%>%
+  group_by(user_id)%>%
+  dplyr::summarise(Total_Compras = n())%>%
+  group_by(Total_Compras)%>%
+  dplyr::summarise(Total_Clientes = n())%>%
+  ungroup()%>%
+  ggplot(aes(x=Total_Compras,y=Total_Clientes ))+
+  labs(title = 'Quantidades de clientes x quantidades de vendas')+
+  geom_bar(stat = "identity",color = "white", fill = "lightblue")
+```
+
+
+O gráfico mostra um índice de clientes novos e alto, já que tem muitos mais clientes com menos quantidade de compras, e alguns mais antigos com números altos como 100 compras até o momento.   
+ 
+
+
+```{r}
+# Quantidades de compras baseado na hora da compra.
+order %>% 
+  select(order_hour_of_day )%>%
+  group_by(order_hour_of_day )%>%
+  dplyr::summarise(Total_Compras = n())%>%
+  ungroup()%>%
+  ggplot(aes(as.factor(x=order_hour_of_day),y=Total_Compras ))+
+  labs(title = 'Quantidades de compras por Horário', x= 'Horario_Pedidos')+
+  geom_bar(stat = "identity",color = "white", fill = "lightblue")
+```
+
+
+O gráfico mostra que as compras ocorrem em sua maioria no período entre 09:00 e 16:00.  
+
+
+
+```{r}
+# Quantidades de compras por dia da semana
+order %>% 
+  select(order_dow )%>%
+  group_by(order_dow )%>%
+  dplyr::summarise(Total_Compras = n())%>%
+  ungroup()%>%
+  ggplot(aes(as.factor(x=order_dow),y=Total_Compras ))+
+  labs(title = 'Quantidades de compras por dia da semana', x = 'Dia_Pedidos' )+
+  geom_bar(stat = "identity",color = "white", fill = "lightblue")
+```
+
+
+O gráfico mostra que as compras estão bem balanceadas, porem nos dias 0 e 1 com mais frequência, na descrição dos dados não deixa discriminado os dias, porem se considerarmos que inicia sabado e domingos são os dias que as pessoas tem mais tempo livres, poderiam ser esses dias.
+
+
+
+```{r}
+# Quantidades de compras apos a primeira compra
+order %>% 
+  select(days_since_prior_order )%>%
+  group_by(days_since_prior_order )%>%
+  dplyr::summarise(Total_Compras = n())%>%
+  ungroup()%>%
+  ggplot(aes(as.factor(x=days_since_prior_order),y=Total_Compras ))+
+  labs(title = 'Quantidades de compras apos a primeira compra', x = 'Dias' )+
+  geom_bar(stat = "identity",color = "white", fill = "lightblue")
+```
+
+
+O gráfico mostra uma crescente nas vendas na primeira semana após a primeira compra, e um pico maior após 30 dias, assim como algumas compra que foram feitas apenas uma vez. 
+
+ 
+
+```{r}
+# 30 Produtos mais vendidos
+order_products %>% 
+  inner_join(products, by = 'product_id')%>%
+  select(product_name)%>% 
+  group_by(product_name)%>%
+  dplyr::summarise(Vendas = n())%>%
+  arrange(desc(Vendas))%>%
+  slice(1:30,)%>%
+  ungroup()%>%
+  ggplot(aes(reorder(x=product_name, +Vendas) ,y=Vendas ))+
+  labs(title = 'Top-30 Produtos vendidos', x = 'Produto' )+
+  geom_bar(stat = "identity",color = "white", fill = "lightblue")+ 
+  coord_flip()
+```
+
+```{r}
+# 30 Produtos mais vendidos pela primera vez
+order_products %>% 
+  inner_join(products, by = 'product_id')%>%
+  select(product_name,reordered)%>% 
+  filter(reordered == 0)%>%
+  group_by(product_name)%>%
+  dplyr::summarise(Vendas = n())%>%
+  arrange(desc(Vendas))%>%
+  slice(1:30,)%>%
+  ungroup()%>%
+  ggplot(aes(reorder(x=product_name, +Vendas) ,y=Vendas ))+
+  labs(title = 'Top-30 Produtos vendidos pela primeira vez', x = 'Produto' )+
+  geom_bar(stat = "identity",color = "white", fill = "lightblue")+ 
+  coord_flip()
+```
+
+```{r}
+# 30 Produtos mais vendidos mais de uma vez
+order_products %>% 
+  inner_join(products, by = 'product_id')%>%
+  select(product_name,reordered)%>% 
+  filter(reordered == 1)%>%
+  group_by(product_name)%>%
+  dplyr::summarise(Vendas = n())%>%
+  arrange(desc(Vendas))%>%
+  slice(1:30,)%>%
+  ungroup()%>%
+  ggplot(aes(reorder(x=product_name, +Vendas) ,y=Vendas ))+
+  labs(title = 'Top-30 Produtos vendidos mais de uma vez', x = 'Produto' )+
+  geom_bar(stat = "identity",color = "white", fill = "lightblue")+ 
+  coord_flip()
+```
+
+
+Existe um padrão na vendas dos produtos, tanto no gráfico geral de vendas, quando no vendas de produtos pela primeira vez e compras recorrentes, tem basicamente os mesmo produtos. 
+
+
+
+```{r}
+# Quantidades de itens comprados por pessoa
+order_products %>% 
+  group_by(order_id) %>% 
+  dplyr::summarise(Itens = last(add_to_cart_order)) %>%
+  ggplot(aes(x= Itens, y = (..count..)))+
+  geom_histogram(color = "white", fill = "lightblue",bins = 150)+
+  labs(title = 'Quantidades de itens comprados por pessoa', y = 'Pessoas' )
+```
+
+
+O gráfico mostra que a maioria das pessoas compram em média de 4 a 7 produtos por compra. 
+
+
+
+```{r}
+
+# Vendas por Departamento
+order_products %>% 
+  inner_join(products, by = 'product_id')%>%
+  inner_join(departments, by = 'department_id')%>%
+  select(department)%>% 
+  group_by(department)%>%
+  dplyr::summarise(Vendas = n())%>%
+  arrange(desc(Vendas))%>%
+  ungroup()%>%
+  ggplot(aes(reorder(x=department, +Vendas) ,y=Vendas ))+
+  labs(title = 'Vendas por departamento', x = 'Departamento' )+
+  geom_bar(stat = "identity",color = "white", fill = "lightblue")+ 
+  coord_flip()
+```
+
+
+Produce e dairy eggs são os com mais vendas. 
+  
+
+
+```{r}
+# Top-30 Vendas por corredores 
+order_products %>% 
+  inner_join(products, by = 'product_id')%>%
+  inner_join(aisles, by = 'aisle_id')%>%
+  select(aisle)%>% 
+  group_by(aisle)%>%
+  dplyr::summarise(Vendas = n())%>%
+  arrange(desc(Vendas))%>%
+  ungroup()%>%
+  slice(1:30,)%>%
+  ggplot(aes(reorder(x=aisle, +Vendas) ,y=Vendas ))+
+  labs(title = 'Top-30-Vendas por corredores de produtos', x = 'Corredores' )+
+  geom_bar(stat = "identity",color = "white", fill = "lightblue")+ 
+  coord_flip()
+```
+
+
+Os corredores de produtos com mais vendas são os de frutas e legumes, não podia ser diferente já que são os produtos que mais tem vendas.   
+  
+  
+
+```{r}
+# Media das primeiras compras comparada a recompra desse produto
+order %>% 
+  inner_join(order_products,by="order_id") %>%
+  select(days_since_prior_order, reordered)%>%
+  group_by(days_since_prior_order) %>%
+  dplyr::summarise(Media = mean(reordered)) %>%
+  ggplot(aes(x=days_since_prior_order,y= Media))+
+  geom_bar(stat="identity",color = "white", fill = "lightblue")+
+  labs(title = 'Media das primeiras compras x Compras recorrentes', x = 'Dia_desde_primeira_compra')
+```
+
+
+O gráfico mostra um padrão, onde existe uma grande chance de comprarem o mesmo item mais de uma vez no mesmo dia, e um padrão quase constante de comprarem mesmo item durante os próximos 30 dias. 
+ 
+
+
+```{r}
+# Produto comprado novamente e uma nova compra.
+order_products %>%
+  select(reordered) %>%
+  group_by(reordered) %>% 
+  dplyr::summarise(Total = n()) %>% 
+  ggplot(aes(as.factor(x=reordered),y=Total ))+
+  labs(title = 'Nova Compra x Recompra', x= 'Nova Compra x Recompra')+
+  geom_bar(stat = "identity",color = "white", fill = "lightblue")
+```
+
+
+O gráfico mostra que tem mais produtos comprados novamente o que é de se esperar, porem mostra também uma boa quantia de produtos que não haviam sido comprados anteriormente.  
+   
+
+
+```{r}
+# treemap mostrando os produtos mais vendidos por departamento. 
+products %>%
+  group_by(aisle_id, department_id) %>%
+  dplyr::summarise(count = n()) %>%
+  ungroup() %>% 
+  left_join(aisles) %>%
+  left_join(departments) %>%
+  group_by(department, aisle) %>%
+  dplyr::summarise(count2 = n())%>%
+  treemap(index = c("department", "aisle"), vSize = "count2", title="",border.col="white")
+
+```
+
+
+
+## Market Basket Analysis
+
+```{r}
+# Este código faz um junção dos dois dataset e seleciono apenas a ordem da venda e os produtos, crio um novo data frame com duas colunas, ordem de venda e os produtos vendidos em cada venda separados por vírgula.  
+
+products_sold <-  order_products %>%
+  inner_join(products, by = 'product_id') %>% 
+  select(order_id, product_name ) %>%
+  ddply('order_id', 
+  function(x)paste(x$product_name ,
+  collapse = ","))
+```
+
+
+```{r}
+# Apago os ids para manter so os produtos  
+products_sold$order_id <- NULL
+# Renomeio a coluna de produtos.  
+names(products_sold) <- 'Produtos'
+# Salvo o dataframe
+write.csv(products_sold, 'Dados/products_sold.csv',quote = FALSE, row.names = FALSE)
+```
+
+
+```{r}
+# Crio o data set de transições usando o read.transation do pacote arules.
+transation <- read.transactions('Dados/products_sold.csv',format = 'basket', sep=',')
+
+# Faço um sumario do objeto criado.
+summary(transation)
+```
+
+
+O objeto criado se trata de uma matriz sparse , onde podemos ver o número de transações e colunas, onde as colunas são as os produtos e as linhas são as transações em si, o número de coleção dos itens relacionados. 
+
+A densidade nos mostra a porcentagem de números diferentes de 0 da matriz. 
+
+No sumario também podemos ver a distribuição de frequência de ocorrência de cada item.Podemos que bag of organic bananas, banana, soda, organic baby spinach e spring water são os 5 mais frequentes, irei plotar um gráfico abaixo com os 30 itens mais frequentes utilizando duas métricas. 
+
+
+
+```{r}
+# Plot com os 30 produtos mais frequentes.
+
+itemFrequencyPlot(transation,topN=30,type="absolute", main="Frequência absoluta de cada produto")
+
+itemFrequencyPlot(transation,topN=30,type="relative", main="Frequência relativa de cada produto")
+```
+
+
+A frequência absoluta considera apenas o a frequência de cada produto independente, já a frequência relativa, mostra a frequência de cada produto quando comparado a ocorrência de outros produtos. 
+
+
+
+Agora usarei o algoritmo apriori do pacote arules, esse algoritmo criar regras de associação entre os produtos baseados no objeto transation criado, e como resultado, irá mostrar quais produtos levam a compra de outros produtos, com esses dados a empresa pode avaliar a compra de alguns clientes e recomendar outros produtos baseado nesse resultado. 
+
+Usarei o suporte de 0.001 e a confiança de 0.8.
+
+O Suporte é relacionado a quantidade de vezes que o item aparece dentro do conjunto de itens. Já confiança é a probabilidade da associação feita pelo algoritmo está correta em relação a uma nova transação. Já o máximo de itens é o número max de associação feitas. 
+
+```{r}
+association_rules <- apriori(transation, parameter =list(supp=0.001, conf=0.8))
+```
+
+```{r}
+# Resumo mostrando as regras criadas.
+summary(association_rules)
+
+# Quantidades de regras.
+length(association_rules)
+
+# Regras redundantes. 
+Non_Redunt_rules <- which(colSums(is.subset(association_rules, association_rules)) > 1) 
+
+# Quantidade de regras redundantes. 
+length(Non_Redunt_rules)
+
+# Removo as regras redundantes.
+association_rules_Non_Redunt <- association_rules[-Non_Redunt_rules]
+
+# Quantidade de regras do negocio.
+length(association_rules_Non_Redunt)
+```
+
+
+```{r}
+# Visualizo as primeiras 20 regras. 
+inspect(association_rules_Non_Redunt[1:20])
+```
+
+
+```{r}
+# Plot com as  regras baseado na confiança
+plot(head(association_rules_Non_Redunt, by = "confidence"), method = "graph",  engine = "htmlwidget")
+
+# Salvo em um grafico as regras baseados na confiança
+saveAsGraph(head(association_rules_Non_Redunt, by = "confidence"), file = "association_rules.graphml")
+```
+
+
+```{r}
+# Plot com as regras baseado no support
+plot(head(association_rules_Non_Redunt, by = "support"), method = "graph",  engine = "htmlwidget")
+
+# Salvo em um grafico as regras baseados no support
+saveAsGraph(head(association_rules_Non_Redunt, by = "support"), file = "association_rules.graphml")
+```
+
+
+```{r}
+# Crio uma tabela em formato HTML
+association_table<- inspectDT(association_rules_Non_Redunt)
+htmlwidgets::saveWidget(association_table, "association.html", selfcontained = FALSE)
+# browseURL("association.html")
+```
+
+
+Com essa tabela podemos identificar quais produtos vendem mais e quais levam a compra de outros, podemos filtrar por confiança ou suporte por exemplo, e tirar os insights relacionado a venda de cada produto e suas relações.
+
+Com o suporte de 0,001 o algoritmo chegou a 55 regras de associação entre produtos, tirando as regras redundantes, caso seja solicitado um uma análise mais ampla, pode diminuir o valor do suporte para 0,0001 que terá mais regras, essa opção assim como a confiança vai de acordo com o que for solicitado pelos gestores baseado na regra do negócio. 
+
+
+
+## Conclusão 
+
+Baseados na tabela de associação e nos gráficos, levando em consideração a confiança e o suporte, a empresa pode identificar quais produtos poderão ser vendidos no futuro, quais produtos levam a compra de outros e produtos que são mais e menos procurados, e criar estratégias baseadas nessas regras, como exemplos:
+
+Colocar produtos que vendem menos perto de produtos que vendem mais, no caso de uma loja local, se for pela internet como no projeto pode colocar esses produtos que vendem menos como opções para os que vendem mais. 
+
+Colocar produtos que levam a compra de outros próximos a vista do cliente, no caso de uma loja local, se for pela internet como no projeto, criar recomendações dos produtos, para que induza o cliente a comprar um determinado produto que é recorrentemente comprado com outro que ele está comprando, afim de maximizar as vendas. 
+
+Verificar produtos que vendem menos e tentar identificar o motivo pelo qual ele vende menos e tentar criar alternativas para melhorar a venda, como promoções e etc.
+
+Tais informações com estas entre outras são cruciais atualmente para uma boa estratégia de negócio e o sucesso da mesma, e que não podem ser negligenciados e ignorados, isso mostra a força da analises de dados e quão eficazes sistemas de recomendação podem ser. 
+
+
+### Obrigado! Entre em contato comigo acessando meu portifolio (https://campos1989.github.io/) no menu contato!
+
